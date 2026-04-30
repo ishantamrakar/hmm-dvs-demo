@@ -1,20 +1,24 @@
 import numpy as np
 
 
-def extract_observations(events, num_bins, bin_ms=10, threshold=0.5):
+def extract_observations(events, num_bins, bin_ms=10, threshold=1.5):
     """Returns int array of observation indices (0=LEFT_FLOW, 1=NO_FLOW, 2=RIGHT_FLOW), shape (num_bins,)."""
     bin_us = bin_ms * 1000
-    obs = np.ones(num_bins, dtype=int)  # default NO_FLOW
+    obs = np.ones(num_bins, dtype=int)
 
     for k in range(num_bins):
         ev = [e for e in events if k*bin_us <= e[0] < (k+1)*bin_us]
-        on_x  = [e[1] for e in ev if e[3] ==  1]
-        off_x = [e[1] for e in ev if e[3] == -1]
+        on_x  = np.array([e[1] for e in ev if e[3] ==  1], dtype=float)
+        off_x = np.array([e[1] for e in ev if e[3] == -1], dtype=float)
 
-        if not on_x or not off_x:
+        if not len(on_x) or not len(off_x):
             continue
 
-        flow = np.mean(on_x) - np.mean(off_x)
+        # shrink flow estimate toward zero proportional to evidence strength;
+        # low event counts (noise-dominated bins) stay near NO_FLOW
+        n = len(on_x) + len(off_x)
+        flow = (np.mean(on_x) - np.mean(off_x)) * np.log1p(n) / np.log1p(n + 100)
+
         if   flow >  threshold: obs[k] = 2
         elif flow < -threshold: obs[k] = 0
 
