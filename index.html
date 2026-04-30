@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HMM Forward Algorithm on Synthetic DVS Events</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0f1117;
+    color: #e0e0e0;
+    font-family: "SF Mono", "Fira Code", monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px;
+    min-height: 100vh;
+  }
+
+  h1 {
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    color: #aaa;
+    margin-bottom: 4px;
+  }
+
+  .subtitle {
+    font-size: 0.72rem;
+    color: #555;
+    margin-bottom: 20px;
+  }
+
+  .main {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    grid-template-rows: auto auto;
+    gap: 12px;
+    width: 100%;
+    max-width: 960px;
+  }
+
+  .panel {
+    background: #161b22;
+    border: 1px solid #222;
+    border-radius: 6px;
+    padding: 10px;
+  }
+
+  .panel-label {
+    font-size: 0.65rem;
+    color: #555;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  /* sensor canvas */
+  #sensor-wrap { grid-row: 1 / 3; }
+  #sensor {
+    display: block;
+    width: 200px;
+    height: 200px;
+    image-rendering: pixelated;
+    border: 1px solid #2a2a2a;
+  }
+
+  .mode-badge {
+    margin-top: 8px;
+    text-align: center;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 4px 0;
+    border-radius: 3px;
+    letter-spacing: 0.08em;
+  }
+
+  .bin-counter {
+    margin-top: 6px;
+    text-align: center;
+    font-size: 0.65rem;
+    color: #444;
+  }
+
+  /* posterior canvas */
+  #posterior-wrap { grid-column: 2; grid-row: 1; }
+  #posterior {
+    display: block;
+    width: 100%;
+    height: 160px;
+  }
+
+  /* obs strip */
+  #obs-wrap { grid-column: 2; grid-row: 2; }
+  #obs-strip {
+    display: block;
+    width: 100%;
+    height: 48px;
+  }
+
+  /* controls */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 14px;
+    width: 100%;
+    max-width: 960px;
+  }
+
+  button {
+    background: #21262d;
+    border: 1px solid #333;
+    color: #ccc;
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+  }
+  button:hover { background: #2d333b; }
+  button:active { background: #161b22; }
+
+  .speed-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.7rem;
+    color: #555;
+  }
+  input[type=range] { width: 90px; accent-color: #5c8fe0; }
+
+  .ll-display {
+    margin-left: auto;
+    font-size: 0.68rem;
+    color: #444;
+  }
+
+  .legend {
+    display: flex;
+    gap: 14px;
+    margin-top: 10px;
+    font-size: 0.68rem;
+    color: #777;
+  }
+  .legend-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<h1>HMM Forward Algorithm · Synthetic DVS Events</h1>
+<p class="subtitle">hidden state: bar motion mode &nbsp;|&nbsp; observation: event-flow proxy &nbsp;|&nbsp; inference: forward algorithm</p>
+
+<div class="main">
+  <div class="panel" id="sensor-wrap">
+    <div class="panel-label">DVS sensor (64×64)</div>
+    <canvas id="sensor" width="64" height="64"></canvas>
+    <div class="mode-badge" id="mode-badge">—</div>
+    <div class="bin-counter" id="bin-counter">bin 0 / 3000</div>
+  </div>
+
+  <div class="panel" id="posterior-wrap">
+    <div class="panel-label">filtered posterior &nbsp; P(state | o<sub>1..t</sub>)</div>
+    <canvas id="posterior"></canvas>
+  </div>
+
+  <div class="panel" id="obs-wrap">
+    <div class="panel-label">observation sequence</div>
+    <canvas id="obs-strip"></canvas>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btn-play">▶ play</button>
+  <button id="btn-reset">↺ reset</button>
+  <div class="speed-wrap">
+    <span>speed</span>
+    <input type="range" id="speed" min="1" max="20" value="8">
+    <span id="speed-label">8×</span>
+  </div>
+  <div class="ll-display" id="ll-display"></div>
+</div>
+
+<div class="legend">
+  <span><span class="legend-dot" style="background:#e05c5c"></span>LEFT</span>
+  <span><span class="legend-dot" style="background:#888"></span>REST</span>
+  <span><span class="legend-dot" style="background:#5c8fe0"></span>RIGHT</span>
+</div>
+
+<script>
+const COL = { LEFT: "#e05c5c", REST: "#888888", RIGHT: "#5c8fe0" };
+const COL_IDX = ["#e05c5c", "#888888", "#5c8fe0"];
+const STATE = ["LEFT", "REST", "RIGHT"];
+const BG = "#0f1117";
+
+let data = null, frame = 0, playing = false, raf = null, lastTs = 0;
+
+// ── load data ─────────────────────────────────────────────────────────────────
+fetch("plots/data.json")
+  .then(r => r.json())
+  .then(d => {
+    data = d;
+    document.getElementById("ll-display").textContent =
+      `structured Δlog-likelihood vs uniform: ${(d.ll - d.ll_uniform).toFixed(1)} nats`;
+    initCanvases();
+    drawFrame(0);
+  });
+
+// ── canvas setup ──────────────────────────────────────────────────────────────
+let pCtx, oCtx, pW, pH, oW, oH;
+
+function initCanvases() {
+  const pCanvas = document.getElementById("posterior");
+  pW = pCanvas.offsetWidth; pH = pCanvas.offsetHeight;
+  pCanvas.width = pW; pCanvas.height = pH;
+  pCtx = pCanvas.getContext("2d");
+
+  const oCanvas = document.getElementById("obs-strip");
+  oW = oCanvas.offsetWidth; oH = oCanvas.offsetHeight;
+  oCanvas.width = oW; oCanvas.height = oH;
+  oCtx = oCanvas.getContext("2d");
+
+  clearPosterior();
+  clearObs();
+}
+
+function clearPosterior() {
+  pCtx.fillStyle = "#161b22";
+  pCtx.fillRect(0, 0, pW, pH);
+  // 0.5 line
+  pCtx.strokeStyle = "#2a2a2a";
+  pCtx.lineWidth = 1;
+  pCtx.beginPath();
+  pCtx.moveTo(0, pH * 0.5);
+  pCtx.lineTo(pW, pH * 0.5);
+  pCtx.stroke();
+}
+
+function clearObs() {
+  oCtx.fillStyle = "#161b22";
+  oCtx.fillRect(0, 0, oW, oH);
+}
+
+// ── draw sensor frame ─────────────────────────────────────────────────────────
+const sCanvas = document.getElementById("sensor");
+const sCtx = sCanvas.getContext("2d");
+const F = 64, BW = 5;
+
+function drawSensor(k) {
+  const img = sCtx.createImageData(F, F);
+  const px = img.data;
+
+  // background
+  for (let i = 0; i < px.length; i += 4) {
+    px[i] = 15; px[i+1] = 17; px[i+2] = 23; px[i+3] = 255;
+  }
+
+  // bar (dim grey)
+  const bx = data.bar_x[k];
+  for (let col = bx; col < bx + BW; col++) {
+    for (let row = 0; row < F; row++) {
+      const idx = (row * F + col) * 4;
+      px[idx] = 45; px[idx+1] = 50; px[idx+2] = 60; px[idx+3] = 255;
+    }
+  }
+
+  // events: ON=warm, OFF=cool
+  for (const [x, y, pol] of data.events[k]) {
+    const idx = (y * F + x) * 4;
+    if (pol === 1) {
+      px[idx] = 255; px[idx+1] = 160; px[idx+2] = 60; px[idx+3] = 255;  // ON  orange
+    } else {
+      px[idx] = 60;  px[idx+1] = 140; px[idx+2] = 255; px[idx+3] = 255; // OFF blue
+    }
+  }
+
+  sCtx.putImageData(img, 0, 0);
+}
+
+// ── draw posterior (streaming) ────────────────────────────────────────────────
+let prevPost = null;
+
+function drawPosteriorStep(k) {
+  const T = data.T;
+  const xPrev = prevPost !== null ? ((k - 1) / T) * pW : null;
+  const xCur  = (k / T) * pW;
+
+  for (let s = 0; s < 3; s++) {
+    const yCur  = (1 - data.filtered[k][s])   * pH;
+    if (prevPost === null) { prevPost = data.filtered[0]; continue; }
+    const yPrev = (1 - prevPost[s]) * pH;
+
+    pCtx.strokeStyle = COL_IDX[s];
+    pCtx.lineWidth = 1.5;
+    pCtx.beginPath();
+    pCtx.moveTo(xPrev, yPrev);
+    pCtx.lineTo(xCur, yCur);
+    pCtx.stroke();
+  }
+  prevPost = data.filtered[k];
+}
+
+// ── draw obs strip (streaming) ────────────────────────────────────────────────
+function drawObsStep(k) {
+  const T = data.T;
+  const x = (k / T) * oW;
+  const w = Math.max(1, oW / T);
+  oCtx.fillStyle = COL_IDX[data.obs[k]];
+  oCtx.fillRect(x, 0, w, oH);
+}
+
+// ── update mode badge ─────────────────────────────────────────────────────────
+function updateBadge(k) {
+  const mode = data.gt[k];
+  const badge = document.getElementById("mode-badge");
+  badge.textContent = mode;
+  badge.style.background = COL[mode] + "33";
+  badge.style.color = COL[mode];
+  document.getElementById("bin-counter").textContent =
+    `bin ${k} / ${data.T}  (${(k * data.bin_ms / 1000).toFixed(2)} s)`;
+}
+
+// ── main draw ─────────────────────────────────────────────────────────────────
+function drawFrame(k) {
+  drawSensor(k);
+  drawPosteriorStep(k);
+  drawObsStep(k);
+  updateBadge(k);
+}
+
+// ── animation loop ────────────────────────────────────────────────────────────
+function loop(ts) {
+  if (!playing) return;
+  const speed = parseInt(document.getElementById("speed").value);
+  const mspf  = 1000 / (speed * 10);  // ms per frame at 10 fps base
+
+  if (ts - lastTs >= mspf) {
+    lastTs = ts;
+    if (frame >= data.T - 1) { playing = false; updatePlayBtn(); return; }
+    frame++;
+    drawFrame(frame);
+  }
+  raf = requestAnimationFrame(loop);
+}
+
+function updatePlayBtn() {
+  document.getElementById("btn-play").textContent = playing ? "⏸ pause" : "▶ play";
+}
+
+document.getElementById("btn-play").addEventListener("click", () => {
+  if (!data) return;
+  playing = !playing;
+  updatePlayBtn();
+  if (playing) { lastTs = 0; raf = requestAnimationFrame(loop); }
+  else cancelAnimationFrame(raf);
+});
+
+document.getElementById("btn-reset").addEventListener("click", () => {
+  playing = false; updatePlayBtn();
+  cancelAnimationFrame(raf);
+  frame = 0; prevPost = null;
+  clearPosterior(); clearObs();
+  drawFrame(0);
+});
+
+document.getElementById("speed").addEventListener("input", e => {
+  document.getElementById("speed-label").textContent = e.target.value + "×";
+});
+</script>
+</body>
+</html>
