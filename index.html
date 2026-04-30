@@ -3,376 +3,366 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HMM Forward Algorithm on Synthetic DVS Events</title>
+<title>HMM · DVS Events</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
-  body {
-    background: #0f1117;
-    color: #e0e0e0;
-    font-family: "SF Mono", "Fira Code", monospace;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 24px 16px;
-    min-height: 100vh;
-  }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 16px 40px;
+}
 
-  h1 {
-    font-size: 1rem;
-    font-weight: 500;
-    letter-spacing: 0.05em;
-    color: #aaa;
-    margin-bottom: 4px;
-  }
+h1 {
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: #8b949e;
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+}
+.sub {
+  font-size: 0.62rem;
+  color: #3d444d;
+  margin-bottom: 16px;
+  letter-spacing: 0.04em;
+}
 
-  .subtitle {
-    font-size: 0.72rem;
-    color: #555;
-    margin-bottom: 20px;
-  }
+.wrap {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  grid-template-rows: auto;
+  gap: 10px;
+  width: 100%;
+  max-width: 960px;
+}
 
-  .main {
-    display: grid;
-    grid-template-columns: 220px 1fr;
-    grid-template-rows: auto auto;
-    gap: 12px;
-    width: 100%;
-    max-width: 960px;
-  }
+/* sensor column — spans all three rows */
+#p-sensor {
+  grid-column: 1;
+  grid-row: 1 / 4;
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 8px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
 
-  .panel {
-    background: #161b22;
-    border: 1px solid #222;
-    border-radius: 6px;
-    padding: 10px;
-  }
+/* three stacked panels on the right */
+#p-gt   { grid-column: 2; grid-row: 1; height: 60px; }
+#p-obs  { grid-column: 2; grid-row: 2; height: 60px; }
+#p-post { grid-column: 2; grid-row: 3; height: 160px; }
 
-  .panel-label {
-    font-size: 0.65rem;
-    color: #555;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 8px;
-  }
+.panel {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 8px;
+  overflow: hidden;
+  position: relative;
+}
 
-  /* sensor canvas */
-  #sensor-wrap { grid-row: 1 / 3; }
-  #sensor {
-    display: block;
-    width: 200px;
-    height: 200px;
-    image-rendering: pixelated;
-    border: 1px solid #2a2a2a;
-  }
+.plabel {
+  font-size: 0.58rem;
+  color: #3d444d;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
 
-  .mode-badge {
-    margin-top: 8px;
-    text-align: center;
-    font-size: 0.8rem;
-    font-weight: 600;
-    padding: 4px 0;
-    border-radius: 3px;
-    letter-spacing: 0.08em;
-  }
+canvas { display: block; }
 
-  .bin-counter {
-    margin-top: 6px;
-    text-align: center;
-    font-size: 0.65rem;
-    color: #444;
-  }
+#sensor {
+  width: 184px; height: 184px;
+  image-rendering: pixelated;
+  margin-bottom: 6px;
+}
 
-  /* posterior canvas */
-  #posterior-wrap { grid-column: 2; grid-row: 1; }
-  #posterior {
-    display: block;
-    width: 100%;
-    height: 160px;
-  }
+.badge {
+  width: 100%;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 3px 0;
+  border-radius: 3px;
+}
 
-  /* obs strip */
-  #obs-wrap { grid-column: 2; grid-row: 2; }
-  #obs-strip {
-    display: block;
-    width: 100%;
-    height: 48px;
-  }
+.bin-info {
+  font-size: 0.6rem;
+  color: #3d444d;
+  margin-top: 4px;
+}
 
-  /* controls */
-  .controls {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 14px;
-    width: 100%;
-    max-width: 960px;
-  }
+/* controls */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  width: 100%;
+  max-width: 960px;
+}
 
-  button {
-    background: #21262d;
-    border: 1px solid #333;
-    color: #ccc;
-    padding: 6px 16px;
-    border-radius: 4px;
-    font-family: inherit;
-    font-size: 0.75rem;
-    cursor: pointer;
-    letter-spacing: 0.05em;
-  }
-  button:hover { background: #2d333b; }
-  button:active { background: #161b22; }
+button {
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  padding: 5px 14px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+button:hover { background: #2d333b; }
 
-  .speed-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.7rem;
-    color: #555;
-  }
-  input[type=range] { width: 90px; accent-color: #5c8fe0; }
+.speed-row {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.65rem; color: #3d444d;
+}
+input[type=range] { width: 80px; accent-color: #388bfd; }
+.ll { margin-left: auto; font-size: 0.62rem; color: #3d444d; }
 
-  .ll-display {
-    margin-left: auto;
-    font-size: 0.68rem;
-    color: #444;
-  }
+.legend {
+  display: flex; gap: 16px;
+  margin-top: 8px;
+  font-size: 0.65rem; color: #6e7681;
+}
+.dot {
+  display: inline-block;
+  width: 9px; height: 9px; border-radius: 2px;
+  margin-right: 3px; vertical-align: middle;
+}
 
-  .legend {
-    display: flex;
-    gap: 14px;
-    margin-top: 10px;
-    font-size: 0.68rem;
-    color: #777;
-  }
-  .legend-dot {
-    display: inline-block;
-    width: 10px; height: 10px;
-    border-radius: 2px;
-    margin-right: 4px;
-    vertical-align: middle;
-  }
+#loading {
+  position: fixed; inset: 0;
+  background: #0d1117;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.8rem; color: #3d444d;
+  letter-spacing: 0.1em;
+  z-index: 99;
+  transition: opacity 0.3s;
+}
 </style>
 </head>
 <body>
 
-<h1>HMM Forward Algorithm · Synthetic DVS Events</h1>
-<p class="subtitle">hidden state: bar motion mode &nbsp;|&nbsp; observation: event-flow proxy &nbsp;|&nbsp; inference: forward algorithm</p>
+<div id="loading">loading data…</div>
 
-<div class="main">
-  <div class="panel" id="sensor-wrap">
-    <div class="panel-label">DVS sensor (64×64)</div>
+<h1>Hidden Markov Model · Forward Algorithm · Synthetic DVS Events</h1>
+<p class="sub">
+  hidden states: LEFT / REST / RIGHT &nbsp;·&nbsp;
+  observation: weighted event-flow proxy &nbsp;·&nbsp;
+  inference: α-recursion in log-space
+</p>
+
+<div class="wrap">
+
+  <div id="p-sensor">
+    <div class="plabel">DVS sensor 64×64</div>
     <canvas id="sensor" width="64" height="64"></canvas>
-    <div class="mode-badge" id="mode-badge">—</div>
-    <div class="bin-counter" id="bin-counter">bin 0 / 3000</div>
+    <div class="badge" id="badge">—</div>
+    <div class="bin-info" id="bin-info">bin 0</div>
   </div>
 
-  <div class="panel" id="posterior-wrap">
-    <div class="panel-label">filtered posterior &nbsp; P(state | o<sub>1..t</sub>)</div>
-    <canvas id="posterior"></canvas>
+  <div class="panel" id="p-gt">
+    <div class="plabel">ground truth</div>
+    <canvas id="gt-canvas" width="730" height="36"></canvas>
   </div>
 
-  <div class="panel" id="obs-wrap">
-    <div class="panel-label">observation sequence</div>
-    <canvas id="obs-strip"></canvas>
+  <div class="panel" id="p-obs">
+    <div class="plabel">observation</div>
+    <canvas id="obs-canvas" width="730" height="36"></canvas>
   </div>
+
+  <div class="panel" id="p-post">
+    <div class="plabel">filtered posterior &nbsp; P(state | o<sub>1..t</sub>)</div>
+    <canvas id="post-canvas" width="730" height="136"></canvas>
+  </div>
+
 </div>
 
 <div class="controls">
   <button id="btn-play">▶ play</button>
   <button id="btn-reset">↺ reset</button>
-  <div class="speed-wrap">
-    <span>speed</span>
-    <input type="range" id="speed" min="1" max="20" value="8">
-    <span id="speed-label">8×</span>
+  <div class="speed-row">
+    speed
+    <input type="range" id="speed" min="1" max="10" value="4">
+    <span id="spd-lbl">4×</span>
   </div>
-  <div class="ll-display" id="ll-display"></div>
+  <div class="ll" id="ll-txt"></div>
 </div>
 
 <div class="legend">
-  <span><span class="legend-dot" style="background:#e05c5c"></span>LEFT</span>
-  <span><span class="legend-dot" style="background:#888"></span>REST</span>
-  <span><span class="legend-dot" style="background:#5c8fe0"></span>RIGHT</span>
+  <span><span class="dot" style="background:#e05c5c"></span>LEFT</span>
+  <span><span class="dot" style="background:#888"></span>REST</span>
+  <span><span class="dot" style="background:#5c8fe0"></span>RIGHT</span>
+  &nbsp;·&nbsp;
+  <span><span class="dot" style="background:#ffaa3c"></span>ON event</span>
+  <span><span class="dot" style="background:#3c8cff"></span>OFF event</span>
 </div>
 
 <script>
-const COL = { LEFT: "#e05c5c", REST: "#888888", RIGHT: "#5c8fe0" };
-const COL_IDX = ["#e05c5c", "#888888", "#5c8fe0"];
-const STATE = ["LEFT", "REST", "RIGHT"];
-const BG = "#0f1117";
+const COL      = ["#e05c5c", "#888888", "#5c8fe0"];
+const NAMES    = ["LEFT", "REST", "RIGHT"];
+const PANEL_BG = "#161b22";
+const MODE_INT = {LEFT:0, REST:1, RIGHT:2};
+const WINDOW   = 120;  // bins shown in rolling window
 
-let data = null, frame = 0, playing = false, raf = null, lastTs = 0;
+let D = null, frame = 0, playing = false, raf = null, lastTs = -Infinity;
 
-// ── load data ─────────────────────────────────────────────────────────────────
-fetch("plots/data.json")
-  .then(r => r.json())
-  .then(d => {
-    data = d;
-    document.getElementById("ll-display").textContent =
-      `structured Δlog-likelihood vs uniform: ${(d.ll - d.ll_uniform).toFixed(1)} nats`;
-    initCanvases();
-    drawFrame(0);
-  });
+fetch("plots/data.json").then(r => r.json()).then(d => {
+  D = d;
+  document.getElementById("loading").style.opacity = 0;
+  setTimeout(() => document.getElementById("loading").style.display = "none", 300);
+  document.getElementById("ll-txt").textContent =
+    `Δlog-likelihood (structured − uniform): ${(d.ll - d.ll_uniform).toFixed(1)} nats`;
+  render(0);
+});
 
-// ── canvas setup ──────────────────────────────────────────────────────────────
-let pCtx, oCtx, pW, pH, oW, oH;
-
-function initCanvases() {
-  const pCanvas = document.getElementById("posterior");
-  pW = pCanvas.offsetWidth; pH = pCanvas.offsetHeight;
-  pCanvas.width = pW; pCanvas.height = pH;
-  pCtx = pCanvas.getContext("2d");
-
-  const oCanvas = document.getElementById("obs-strip");
-  oW = oCanvas.offsetWidth; oH = oCanvas.offsetHeight;
-  oCanvas.width = oW; oCanvas.height = oH;
-  oCtx = oCanvas.getContext("2d");
-
-  clearPosterior();
-  clearObs();
-}
-
-function clearPosterior() {
-  pCtx.fillStyle = "#161b22";
-  pCtx.fillRect(0, 0, pW, pH);
-  // 0.5 line
-  pCtx.strokeStyle = "#2a2a2a";
-  pCtx.lineWidth = 1;
-  pCtx.beginPath();
-  pCtx.moveTo(0, pH * 0.5);
-  pCtx.lineTo(pW, pH * 0.5);
-  pCtx.stroke();
-}
-
-function clearObs() {
-  oCtx.fillStyle = "#161b22";
-  oCtx.fillRect(0, 0, oW, oH);
-}
-
-// ── draw sensor frame ─────────────────────────────────────────────────────────
-const sCanvas = document.getElementById("sensor");
-const sCtx = sCanvas.getContext("2d");
-const F = 64, BW = 5;
+// ── sensor ────────────────────────────────────────────────────────────────────
+const sCvs = document.getElementById("sensor");
+const sCtx = sCvs.getContext("2d");
 
 function drawSensor(k) {
+  const F = D.frame_size, BW = D.bar_width;
   const img = sCtx.createImageData(F, F);
-  const px = img.data;
-
-  // background
+  const px  = img.data;
   for (let i = 0; i < px.length; i += 4) {
-    px[i] = 15; px[i+1] = 17; px[i+2] = 23; px[i+3] = 255;
+    px[i]=13; px[i+1]=17; px[i+2]=23; px[i+3]=255;
   }
-
-  // bar (dim grey)
-  const bx = data.bar_x[k];
+  const bx = D.bar_x[k];
   for (let col = bx; col < bx + BW; col++) {
     for (let row = 0; row < F; row++) {
-      const idx = (row * F + col) * 4;
-      px[idx] = 45; px[idx+1] = 50; px[idx+2] = 60; px[idx+3] = 255;
+      const i = (row*F + col)*4;
+      px[i]=40; px[i+1]=46; px[i+2]=56; px[i+3]=255;
     }
   }
-
-  // events: ON=warm, OFF=cool
-  for (const [x, y, pol] of data.events[k]) {
-    const idx = (y * F + x) * 4;
-    if (pol === 1) {
-      px[idx] = 255; px[idx+1] = 160; px[idx+2] = 60; px[idx+3] = 255;  // ON  orange
-    } else {
-      px[idx] = 60;  px[idx+1] = 140; px[idx+2] = 255; px[idx+3] = 255; // OFF blue
-    }
+  for (const [x, y, pol] of D.events[k]) {
+    const i = (y*F + x)*4;
+    if (pol === 1) { px[i]=255; px[i+1]=170; px[i+2]=60;  px[i+3]=255; }
+    else           { px[i]=60;  px[i+1]=140; px[i+2]=255; px[i+3]=255; }
   }
-
   sCtx.putImageData(img, 0, 0);
 }
 
-// ── draw posterior (streaming) ────────────────────────────────────────────────
-let prevPost = null;
+function updateBadge(k) {
+  const mode = D.gt[k];
+  const p    = D.filtered[k];
+  const map  = NAMES[p.indexOf(Math.max(...p))];
+  const el   = document.getElementById("badge");
+  el.textContent = `gt: ${mode}   map: ${map}`;
+  el.style.background = COL[MODE_INT[mode]] + "22";
+  el.style.color = COL[MODE_INT[mode]];
+  document.getElementById("bin-info").textContent =
+    `bin ${k} / ${D.T}  ·  ${(k * D.bin_ms / 1000).toFixed(2)} s`;
+}
 
-function drawPosteriorStep(k) {
-  const T = data.T;
-  const xPrev = prevPost !== null ? ((k - 1) / T) * pW : null;
-  const xCur  = (k / T) * pW;
+// ── shared rolling-window draw for gt and obs strips ─────────────────────────
+function drawStrip(cvs, ctx, k, valueFn) {
+  const W = cvs.width, H = cvs.height;
+  ctx.fillStyle = PANEL_BG; ctx.fillRect(0, 0, W, H);
+
+  const start = Math.max(0, k - WINDOW + 1);
+  const bw    = W / WINDOW;
+
+  for (let bi = start; bi <= k; bi++) {
+    const x = (bi - start) * bw;
+    ctx.fillStyle = COL[valueFn(bi)];
+    ctx.fillRect(x, 0, Math.ceil(bw), H);
+  }
+}
+
+const gtCvs  = document.getElementById("gt-canvas");
+const gtCtx  = gtCvs.getContext("2d");
+const obsCvs = document.getElementById("obs-canvas");
+const obsCtx = obsCvs.getContext("2d");
+
+function drawGT(k)  { drawStrip(gtCvs,  gtCtx,  k, bi => MODE_INT[D.gt[bi]]); }
+function drawObs(k) { drawStrip(obsCvs, obsCtx, k, bi => D.obs[bi]); }
+
+// ── rolling posterior ─────────────────────────────────────────────────────────
+const pCvs = document.getElementById("post-canvas");
+const pCtx = pCvs.getContext("2d");
+
+function drawPost(k) {
+  const W = pCvs.width, H = pCvs.height;
+  pCtx.fillStyle = PANEL_BG; pCtx.fillRect(0, 0, W, H);
+
+  [0.25, 0.5, 0.75].forEach(frac => {
+    pCtx.strokeStyle = "#21262d"; pCtx.lineWidth = 1;
+    pCtx.beginPath();
+    pCtx.moveTo(0, frac*H); pCtx.lineTo(W, frac*H);
+    pCtx.stroke();
+  });
+
+  const start = Math.max(0, k - WINDOW + 1);
+  const bw    = W / WINDOW;
 
   for (let s = 0; s < 3; s++) {
-    const yCur  = (1 - data.filtered[k][s])   * pH;
-    if (prevPost === null) { prevPost = data.filtered[0]; continue; }
-    const yPrev = (1 - prevPost[s]) * pH;
-
-    pCtx.strokeStyle = COL_IDX[s];
-    pCtx.lineWidth = 1.5;
     pCtx.beginPath();
-    pCtx.moveTo(xPrev, yPrev);
-    pCtx.lineTo(xCur, yCur);
+    pCtx.strokeStyle = COL[s]; pCtx.lineWidth = 1.5;
+    for (let bi = start; bi <= k; bi++) {
+      const x = (bi - start) * bw;
+      const y = (1 - D.filtered[bi][s]) * H;
+      bi === start ? pCtx.moveTo(x, y) : pCtx.lineTo(x, y);
+    }
     pCtx.stroke();
   }
-  prevPost = data.filtered[k];
+
+  pCtx.fillStyle = "#3d444d"; pCtx.font = "8px monospace"; pCtx.textAlign = "left";
+  pCtx.fillText("1.0", 2, 9);
+  pCtx.fillText("0.5", 2, H*0.5 - 2);
+  pCtx.fillText("0.0", 2, H - 2);
 }
 
-// ── draw obs strip (streaming) ────────────────────────────────────────────────
-function drawObsStep(k) {
-  const T = data.T;
-  const x = (k / T) * oW;
-  const w = Math.max(1, oW / T);
-  oCtx.fillStyle = COL_IDX[data.obs[k]];
-  oCtx.fillRect(x, 0, w, oH);
-}
-
-// ── update mode badge ─────────────────────────────────────────────────────────
-function updateBadge(k) {
-  const mode = data.gt[k];
-  const badge = document.getElementById("mode-badge");
-  badge.textContent = mode;
-  badge.style.background = COL[mode] + "33";
-  badge.style.color = COL[mode];
-  document.getElementById("bin-counter").textContent =
-    `bin ${k} / ${data.T}  (${(k * data.bin_ms / 1000).toFixed(2)} s)`;
-}
-
-// ── main draw ─────────────────────────────────────────────────────────────────
-function drawFrame(k) {
+// ── main render ───────────────────────────────────────────────────────────────
+function render(k) {
   drawSensor(k);
-  drawPosteriorStep(k);
-  drawObsStep(k);
   updateBadge(k);
+  drawGT(k);
+  drawObs(k);
+  drawPost(k);
 }
 
 // ── animation loop ────────────────────────────────────────────────────────────
 function loop(ts) {
   if (!playing) return;
-  const speed = parseInt(document.getElementById("speed").value);
-  const mspf  = 1000 / (speed * 10);  // ms per frame at 10 fps base
-
-  if (ts - lastTs >= mspf) {
-    lastTs = ts;
-    if (frame >= data.T - 1) { playing = false; updatePlayBtn(); return; }
-    frame++;
-    drawFrame(frame);
-  }
   raf = requestAnimationFrame(loop);
+  const spd  = parseInt(document.getElementById("speed").value);
+  const mspf = 1000 / (spd * 10);
+  if (ts - lastTs < mspf) return;
+  lastTs = ts;
+  if (frame >= D.T - 1) { playing = false; updateBtn(); return; }
+  frame++;
+  render(frame);
 }
 
-function updatePlayBtn() {
+function updateBtn() {
   document.getElementById("btn-play").textContent = playing ? "⏸ pause" : "▶ play";
 }
 
 document.getElementById("btn-play").addEventListener("click", () => {
-  if (!data) return;
-  playing = !playing;
-  updatePlayBtn();
-  if (playing) { lastTs = 0; raf = requestAnimationFrame(loop); }
+  if (!D) return;
+  playing = !playing; updateBtn();
+  if (playing) { lastTs = -Infinity; raf = requestAnimationFrame(loop); }
   else cancelAnimationFrame(raf);
 });
 
 document.getElementById("btn-reset").addEventListener("click", () => {
-  playing = false; updatePlayBtn();
-  cancelAnimationFrame(raf);
-  frame = 0; prevPost = null;
-  clearPosterior(); clearObs();
-  drawFrame(0);
+  playing = false; updateBtn(); cancelAnimationFrame(raf);
+  frame = 0; render(0);
 });
 
 document.getElementById("speed").addEventListener("input", e => {
-  document.getElementById("speed-label").textContent = e.target.value + "×";
+  document.getElementById("spd-lbl").textContent = e.target.value + "×";
 });
 </script>
 </body>
