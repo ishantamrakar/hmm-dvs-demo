@@ -1,84 +1,62 @@
 import numpy as np
 
+_VX = {"LEFT": -2, "REST": 0, "RIGHT": 2}
+
 
 def simulate(mode_sequence, frame_size=64, bar_width=5, bin_ms=10, noise_rate=0.05, seed=0):
-    """
-    Simulate a moving bar on a DVS sensor.
-
-    Returns:
-        events: list of (t_us, x, y, polarity) tuples, sorted by t_us
-        gt_modes: list of mode strings, length len(mode_sequence)
-    """
     rng = np.random.default_rng(seed)
-
-    # velocity in pixels per bin for each mode
-    VELOCITY = {"LEFT": -2, "REST": 0, "RIGHT": 2}
-
+    bin_us = bin_ms * 1000
     events = []
-    bar_x = frame_size // 2  # leading (left) edge of bar, starts at center
-    bin_us = bin_ms * 1_000  # 10 ms in microseconds
+    x = frame_size // 2  # bar left edge
 
-    for bin_idx, mode in enumerate(mode_sequence):
-        t_start = bin_idx * bin_us
-        vx = VELOCITY[mode]
-        new_bar_x = int(np.clip(bar_x + vx, 0, frame_size - bar_width))
+    for k, mode in enumerate(mode_sequence):
+        t0 = k * bin_us
+        vx = _VX[mode]
+        x_new = int(np.clip(x + vx, 0, frame_size - bar_width))
 
-        # columns newly entered by the bar (ON events)
         if vx > 0:
-            entered_cols = range(bar_x + bar_width, new_bar_x + bar_width)
-            left_cols    = range(bar_x,             new_bar_x)
+            on_cols  = range(x + bar_width, x_new + bar_width)
+            off_cols = range(x, x_new)
         elif vx < 0:
-            entered_cols = range(new_bar_x,          bar_x)
-            left_cols    = range(new_bar_x + bar_width, bar_x + bar_width)
+            on_cols  = range(x_new, x)
+            off_cols = range(x_new + bar_width, x + bar_width)
         else:
-            entered_cols = range(0, 0)  # empty
-            left_cols    = range(0, 0)
+            on_cols = off_cols = range(0)
 
-        # emit signal events for every pixel in the bar's vertical extent
-        for col in entered_cols:
-            for y in range(frame_size):
-                t = int(t_start + rng.integers(0, bin_us))
-                events.append((t, int(col), y, 1))   # ON
+        for col in on_cols:
+            ts = t0 + rng.integers(0, bin_us, size=frame_size)
+            for y, t in enumerate(ts):
+                events.append((int(t), col, y, 1))
 
-        for col in left_cols:
-            for y in range(frame_size):
-                t = int(t_start + rng.integers(0, bin_us))
-                events.append((t, int(col), y, -1))  # OFF
+        for col in off_cols:
+            ts = t0 + rng.integers(0, bin_us, size=frame_size)
+            for y, t in enumerate(ts):
+                events.append((int(t), col, y, -1))
 
-        # noise: ~noise_rate fraction of pixels fire a random event
         n_noise = int(frame_size * frame_size * noise_rate)
-        for _ in range(n_noise):
-            t   = int(t_start + rng.integers(0, bin_us))
-            nx  = int(rng.integers(0, frame_size))
-            ny  = int(rng.integers(0, frame_size))
-            pol = int(rng.choice([-1, 1]))
-            events.append((t, nx, ny, pol))
+        t_n  = t0 + rng.integers(0, bin_us, size=n_noise)
+        xs   = rng.integers(0, frame_size, size=n_noise)
+        ys   = rng.integers(0, frame_size, size=n_noise)
+        pols = rng.choice([-1, 1], size=n_noise)
+        for t, nx, ny, p in zip(t_n, xs, ys, pols):
+            events.append((int(t), int(nx), int(ny), int(p)))
 
-        bar_x = new_bar_x
+        x = x_new
 
     events.sort(key=lambda e: e[0])
     return events, list(mode_sequence)
 
 
 if __name__ == "__main__":
-    mode_sequence = ["REST"]*20 + ["RIGHT"]*40 + ["REST"]*10 + ["LEFT"]*30 + ["REST"]*20
+    modes = ["REST"]*20 + ["RIGHT"]*40 + ["REST"]*10 + ["LEFT"]*30 + ["REST"]*20
+    events, _ = simulate(modes)
 
-    events, gt_modes = simulate(mode_sequence)
+    print(f"events: {len(events)},  t=[{events[0][0]}, {events[-1][0]}] µs")
 
-    print(f"Total events : {len(events)}")
-    print(f"Time range   : {events[0][0]} µs → {events[-1][0]} µs")
-    print(f"First 5 events (t_us, x, y, pol):")
-    for e in events[:5]:
-        print(f"  {e}")
-
-    # sanity check: count ON vs OFF events in the first RIGHT bin (bin 20)
-    bin_ms = 10
-    bin_us = bin_ms * 1_000
-    right_start = 20 * bin_us
-    right_end   = 21 * bin_us
-    bin_events  = [e for e in events if right_start <= e[0] < right_end]
-    on_events   = [e for e in bin_events if e[3] == 1]
-    off_events  = [e for e in bin_events if e[3] == -1]
-    print(f"\nBin 20 (first RIGHT bin):")
-    print(f"  ON events  : {len(on_events)}  mean_x = {np.mean([e[1] for e in on_events]):.1f}" if on_events else "  ON events: 0")
-    print(f"  OFF events : {len(off_events)}  mean_x = {np.mean([e[1] for e in off_events]):.1f}" if off_events else "  OFF events: 0")
+    bin_us = 10_000
+    for b in [19, 20, 60, 61]:
+        ev = [e for e in events if b*bin_us <= e[0] < (b+1)*bin_us]
+        on  = [e[1] for e in ev if e[3] ==  1]
+        off = [e[1] for e in ev if e[3] == -1]
+        flow = np.mean(on) - np.mean(off) if on and off else float("nan")
+        print(f"  bin {b:3d} ({modes[b]:5s})  flow={flow:+.2f}  ON={len(on)}  OFF={len(off)}")
