@@ -40,10 +40,10 @@ h1 {
   max-width: 960px;
 }
 
-/* sensor column — spans all three rows */
+/* sensor column — spans all four rows */
 #p-sensor {
   grid-column: 1;
-  grid-row: 1 / 4;
+  grid-row: 1 / 5;
   background: #161b22;
   border: 1px solid #21262d;
   border-radius: 6px;
@@ -54,10 +54,11 @@ h1 {
   align-items: center;
 }
 
-/* three stacked panels on the right */
-#p-gt   { grid-column: 2; grid-row: 1; height: 60px; }
-#p-obs  { grid-column: 2; grid-row: 2; height: 60px; }
-#p-post { grid-column: 2; grid-row: 3; height: 160px; }
+/* four stacked panels on the right */
+#p-gt      { grid-column: 2; grid-row: 1; height: 60px; }
+#p-obs     { grid-column: 2; grid-row: 2; height: 60px; }
+#p-post    { grid-column: 2; grid-row: 3; height: 160px; }
+#p-trellis { grid-column: 2; grid-row: 4; height: 400px; }
 
 .panel {
   background: #161b22;
@@ -187,15 +188,21 @@ input[type=range] { width: 80px; accent-color: #388bfd; }
     <canvas id="post-canvas" width="730" height="136"></canvas>
   </div>
 
+  <div class="panel" id="p-trellis">
+    <div class="plabel">forward trellis &nbsp; α(t,j) = [Σᵢ α(t−1,i)·A[i,j]] · B[j,oₜ]</div>
+    <canvas id="trellis-canvas" style="width:730px;height:366px;"></canvas>
+  </div>
+
 </div>
 
 <div class="controls">
   <button id="btn-play">▶ play</button>
+  <button id="btn-next">⏭ next</button>
   <button id="btn-reset">↺ reset</button>
   <div class="speed-row">
     speed
-    <input type="range" id="speed" min="1" max="10" value="4">
-    <span id="spd-lbl">4×</span>
+    <input type="range" id="speed" min="0.05" max="2" step="0.05" value="1">
+    <span id="spd-lbl">1×</span>
   </div>
   <div class="ll" id="ll-txt"></div>
 </div>
@@ -220,6 +227,7 @@ let D = null, frame = 0, playing = false, raf = null, lastTs = -Infinity;
 
 fetch("plots/data.json").then(r => r.json()).then(d => {
   D = d;
+  initTrellisCanvas();
   document.getElementById("loading").style.opacity = 0;
   setTimeout(() => document.getElementById("loading").style.display = "none", 300);
   document.getElementById("ll-txt").textContent =
@@ -323,6 +331,205 @@ function drawPost(k) {
   pCtx.fillText("0.0", 2, H - 2);
 }
 
+// ── trellis ───────────────────────────────────────────────────────────────────
+const tCvs = document.getElementById("trellis-canvas");
+const tCtx = tCvs.getContext("2d");
+
+const T_WIN    = 5;
+const N_STATES = 3;
+const NODE_R   = 20;
+const RING_MAX = NODE_R + 12;      // max emission ring radius
+const PAD_LEFT = 90;
+const PAD_RIGHT= RING_MAX + 8;
+// top strip: obs label row + gap to first node
+const PAD_TOP  = 52;
+// bottom strip: ring + B= label + gap + t= row + legend row
+const PAD_BOT  = RING_MAX + 16 + 30 + 22;
+
+// DPR scaling — fix retina blur. Called once after data loads.
+function initTrellisCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const css_w = 730, css_h = 366;
+  tCvs.width  = css_w * dpr;
+  tCvs.height = css_h * dpr;
+  tCtx.scale(dpr, dpr);
+  tCvs._cssW = css_w;
+  tCvs._cssH = css_h;
+}
+
+function trellisW() { return tCvs._cssW || 730; }
+function trellisH() { return tCvs._cssH || 366; }
+
+function trellisX(col) {
+  return PAD_LEFT + col * (trellisW() - PAD_LEFT - PAD_RIGHT) / (T_WIN - 1);
+}
+
+function trellisY(s) {
+  return PAD_TOP + s * (trellisH() - PAD_TOP - PAD_BOT) / (N_STATES - 1);
+}
+
+function normalisedAlpha(t) {
+  const la  = D.log_alpha[t];
+  const mx  = Math.max(...la);
+  const exp = la.map(v => Math.exp(v - mx));
+  const sum = exp.reduce((a, b) => a + b, 0);
+  return exp.map(v => v / sum);
+}
+
+function drawArrow(x1, y1, x2, y2, lw, color, opac) {
+  const angle  = Math.atan2(y2 - y1, x2 - x1);
+  const gap    = NODE_R + 2;
+  const sx = x1 + Math.cos(angle) * gap;
+  const sy = y1 + Math.sin(angle) * gap;
+  const ex = x2 - Math.cos(angle) * gap;
+  const ey = y2 - Math.sin(angle) * gap;
+  if (Math.hypot(ex - sx, ey - sy) < 1) return;
+
+  const hLen = Math.min(8, lw * 2.5);
+  tCtx.globalAlpha = opac;
+  tCtx.strokeStyle = color;
+  tCtx.lineWidth   = lw;
+  tCtx.beginPath(); tCtx.moveTo(sx, sy); tCtx.lineTo(ex, ey); tCtx.stroke();
+  tCtx.fillStyle = color;
+  tCtx.beginPath();
+  tCtx.moveTo(ex, ey);
+  tCtx.lineTo(ex - hLen * Math.cos(angle - 0.35), ey - hLen * Math.sin(angle - 0.35));
+  tCtx.lineTo(ex - hLen * Math.cos(angle + 0.35), ey - hLen * Math.sin(angle + 0.35));
+  tCtx.closePath(); tCtx.fill();
+  tCtx.globalAlpha = 1;
+}
+
+function drawTrellis(k) {
+  const W = trellisW(), H = trellisH();
+  tCtx.fillStyle = PANEL_BG;
+  tCtx.fillRect(0, 0, W, H);
+
+  const tStart = Math.max(0, k - T_WIN + 1);
+  const cols   = Math.min(k + 1, T_WIN);
+  const alpha  = Array.from({length: cols}, (_, c) => normalisedAlpha(tStart + c));
+
+  // ── obs label — top strip, centred on canvas, clear of all nodes ────────────
+  const OBS_NAMES = ["LEFT_FLOW", "NO_FLOW", "RIGHT_FLOW"];
+  const curObs    = D.obs[k];
+  tCtx.fillStyle  = COL[curObs];
+  tCtx.font       = "bold 11px monospace";
+  tCtx.textAlign  = "center";
+  tCtx.fillText(`current observation: ${OBS_NAMES[curObs]}`, W / 2, 18);
+
+  // t= labels sit at: bottom node centre + ring clearance + B= label height
+  const botNodeY = trellisY(N_STATES - 1);
+  const tLabelY  = botNodeY + RING_MAX + 30;
+  const legendY  = tLabelY + 20;
+
+  // ── t= labels ───────────────────────────────────────────────────────────────
+  tCtx.textAlign = "center";
+  for (let col = 0; col < cols; col++) {
+    const isNew = col === cols - 1;
+    tCtx.fillStyle = isNew ? "#8b949e" : "#3d444d";
+    tCtx.font      = isNew ? "bold 11px monospace" : "10px monospace";
+    tCtx.fillText(`t=${tStart + col}`, trellisX(col), tLabelY);
+  }
+
+  // ── edges ───────────────────────────────────────────────────────────────────
+  for (let col = 1; col < cols; col++) {
+    const isNew = col === cols - 1;
+    const raw   = [];
+    let edgeMax = 0;
+    for (let i = 0; i < N_STATES; i++) {
+      for (let j = 0; j < N_STATES; j++) {
+        const w = alpha[col - 1][i] * D.A[i][j];
+        raw.push(w);
+        if (w > edgeMax) edgeMax = w;
+      }
+    }
+    for (let i = 0; i < N_STATES; i++) {
+      for (let j = 0; j < N_STATES; j++) {
+        const norm = edgeMax > 0 ? raw[i * N_STATES + j] / edgeMax : 0;
+        drawArrow(
+          trellisX(col - 1), trellisY(i),
+          trellisX(col),     trellisY(j),
+          isNew ? Math.max(0.6, norm * 4.5) : Math.max(0.3, norm * 1.2),
+          COL[i],
+          isNew ? Math.max(0.12, norm * 0.88) : Math.max(0.02, norm * 0.1)
+        );
+      }
+    }
+  }
+
+  // ── nodes ───────────────────────────────────────────────────────────────────
+  for (let col = 0; col < cols; col++) {
+    const t     = tStart + col;
+    const isNew = col === cols - 1;
+    const dimF  = isNew ? 1 : 0.25 + (col / cols) * 0.25;
+
+    for (let s = 0; s < N_STATES; s++) {
+      const a = alpha[col][s];
+      const x = trellisX(col);
+      const y = trellisY(s);
+
+      // background disc
+      tCtx.globalAlpha = dimF;
+      tCtx.beginPath(); tCtx.arc(x, y, NODE_R, 0, Math.PI * 2);
+      tCtx.fillStyle = "#0d1117"; tCtx.fill();
+
+      // filled arc sized by α — never exceeds NODE_R
+      const fillR = Math.max(3, NODE_R * a);
+      tCtx.beginPath(); tCtx.arc(x, y, fillR, 0, Math.PI * 2);
+      tCtx.fillStyle = COL[s]; tCtx.fill();
+
+      // fixed border
+      tCtx.beginPath(); tCtx.arc(x, y, NODE_R, 0, Math.PI * 2);
+      tCtx.strokeStyle = COL[s];
+      tCtx.lineWidth   = isNew ? 2 : 1;
+      tCtx.stroke();
+      tCtx.globalAlpha = 1;
+
+      // emission ring (dashed) on newest column — radius encodes B[s, o_t]
+      if (isNew) {
+        const emit  = D.B[s][curObs];
+        const rRing = NODE_R + 4 + emit * 8;
+        tCtx.beginPath(); tCtx.arc(x, y, rRing, 0, Math.PI * 2);
+        tCtx.setLineDash([4, 4]);
+        tCtx.strokeStyle = "#aaaaaa";
+        tCtx.lineWidth   = 1.5;
+        tCtx.globalAlpha = 0.3 + emit * 0.6;
+        tCtx.stroke();
+        tCtx.setLineDash([]);
+        tCtx.globalAlpha = 1;
+
+        tCtx.fillStyle  = "#6e7681";
+        tCtx.font       = "10px monospace";
+        tCtx.textAlign  = "center";
+        tCtx.fillText(`B=${emit.toFixed(2)}`, x, y + rRing + 13);
+      }
+
+      // α value inside node for newest two columns
+      if (col >= cols - 2) {
+        tCtx.fillStyle   = a > 0.4 ? "#0d1117" : "#ffffff";
+        tCtx.font        = isNew ? "bold 11px monospace" : "10px monospace";
+        tCtx.textAlign   = "center";
+        tCtx.globalAlpha = isNew ? 1 : 0.5;
+        tCtx.fillText(a.toFixed(2), x, y + 4);
+        tCtx.globalAlpha = 1;
+      }
+    }
+  }
+
+  // ── state labels ────────────────────────────────────────────────────────────
+  tCtx.textAlign = "right";
+  tCtx.font      = "12px monospace";
+  for (let s = 0; s < N_STATES; s++) {
+    tCtx.fillStyle = COL[s];
+    tCtx.fillText(NAMES[s], PAD_LEFT - 26, trellisY(s) + 4);
+  }
+
+  // ── legend ──────────────────────────────────────────────────────────────────
+  tCtx.fillStyle  = "#3d444d";
+  tCtx.font       = "11px monospace";
+  tCtx.textAlign  = "left";
+  tCtx.fillText("node fill = α(t,s)   dashed ring = B[s,obs]   edge width = α(t-1,i)·A[i,j]", PAD_LEFT, legendY);
+}
+
 // ── main render ───────────────────────────────────────────────────────────────
 function render(k) {
   drawSensor(k);
@@ -330,18 +537,19 @@ function render(k) {
   drawGT(k);
   drawObs(k);
   drawPost(k);
+  drawTrellis(k);
 }
 
 // ── animation loop ────────────────────────────────────────────────────────────
+// 1× = real time: one 10ms bin per 10ms wall-clock → mspf = bin_ms / speed
 function loop(ts) {
   if (!playing) return;
   raf = requestAnimationFrame(loop);
-  const spd  = parseInt(document.getElementById("speed").value);
-  const mspf = 1000 / (spd * 10);
+  const spd  = parseFloat(document.getElementById("speed").value);
+  const mspf = D.bin_ms / spd;
   if (ts - lastTs < mspf) return;
   lastTs = ts;
-  if (frame >= D.T - 1) { playing = false; updateBtn(); return; }
-  frame++;
+  frame = (frame + 1) % D.T;
   render(frame);
 }
 
@@ -356,13 +564,21 @@ document.getElementById("btn-play").addEventListener("click", () => {
   else cancelAnimationFrame(raf);
 });
 
+document.getElementById("btn-next").addEventListener("click", () => {
+  if (!D) return;
+  playing = false; updateBtn(); cancelAnimationFrame(raf);
+  frame = (frame + 1) % D.T;
+  render(frame);
+});
+
 document.getElementById("btn-reset").addEventListener("click", () => {
   playing = false; updateBtn(); cancelAnimationFrame(raf);
   frame = 0; render(0);
 });
 
 document.getElementById("speed").addEventListener("input", e => {
-  document.getElementById("spd-lbl").textContent = e.target.value + "×";
+  const v = parseFloat(e.target.value);
+  document.getElementById("spd-lbl").textContent = v.toFixed(1) + "×";
 });
 </script>
 </body>

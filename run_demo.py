@@ -6,6 +6,7 @@ import matplotlib.patches as mpatches
 from event_simulator import simulate, random_mode_sequence
 from observations import extract_observations
 from hmm import HMM
+from plot_trellis import animate_trellis
 
 A = np.array([
     [0.90, 0.08, 0.02],
@@ -21,13 +22,15 @@ pi  = np.array([1/3, 1/3, 1/3])
 BIN_MS = 10
 MAX_EVENTS_PER_BIN = 80  # cap for JSON size
 
-# ── simulate 30 s ─────────────────────────────────────────────────────────────
-modes  = random_mode_sequence(n_bins=3000, seed=42)
+# ── simulate ~5 s looping sequence (ends in REST to match start) ──────────────
+_unit = (["REST"]*15 + ["RIGHT"]*20 + ["REST"]*15 +
+         ["LEFT"]*20  + ["REST"]*15)  # 85 bins
+modes = (_unit * 6)[:510]
 events, gt = simulate(modes, bin_ms=BIN_MS)
 obs    = extract_observations(events, num_bins=len(modes), bin_ms=BIN_MS)
 
 # ── inference ─────────────────────────────────────────────────────────────────
-_, ll,   filtered = HMM(A, B, pi).forward(obs)
+log_alpha, ll, filtered = HMM(A, B, pi).forward(obs)
 _, ll_u, _        = HMM(np.full((3,3), 1/3), B, pi).forward(obs)
 
 print(f"structured  log-likelihood : {ll:.1f}")
@@ -68,6 +71,9 @@ payload = {
     "gt"        : gt,
     "obs"       : obs.tolist(),
     "filtered"  : [[round(p, 4) for p in row] for row in filtered.tolist()],
+    "log_alpha" : [[round(v, 4) for v in row] for row in log_alpha.tolist()],
+    "A"         : A.tolist(),
+    "B"         : B.tolist(),
     "bar_x"     : bar_positions,
     "events"    : bin_events,
     "ll"        : round(ll, 2),
@@ -124,3 +130,7 @@ fig.suptitle(
 plt.savefig("plots/demo.png", dpi=150, bbox_inches="tight")
 print("saved plots/demo.png")
 plt.show()
+
+animate_trellis(log_alpha, obs, A, B, gt,
+                output_path="plots/trellis.gif", fps=3,
+                t_start=0, t_end=100)
